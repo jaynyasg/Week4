@@ -40,16 +40,24 @@ flowchart TB
 
     subgraph Browser["Browser (React + Vite)"]
         UI["React UI\n(TailwindCSS)"]
+        SENTRY_WEB["★ Sentry React\n(ErrorBoundary + Replay)"]
         EDITOR["TipTap Editor\n(Yjs CRDT client)"]
         WS_CLIENT["WebSocket Client\n(Yjs + presence)"]
     end
 
     subgraph API["Express API (Node.js)"]
+        OTEL["★ OpenTelemetry SDK\n(auto-instr: HTTP/Express/PG)"]
+        SENTRY_API["★ Sentry Node\n(error + perf telemetry)"]
         MW["Middleware Chain\n(auth, body-limit, CORS)"]
         OBS["★ Observability Middleware\n(structured logs, fail-open)"]
         ROUTES["API Routes\n(documents, issues, sprints, auth)"]
         HEALTH["★ Health / Ready\nGET /health  GET /ready"]
         COLLAB["WebSocket Handler\n(Yjs server, presence)"]
+    end
+
+    subgraph Telemetry["★ Telemetry Backends (configurable)"]
+        SENTRY_SAAS["Sentry SaaS\n(free tier)"]
+        OTLP["OTLP Backend\n(Jaeger/Tempo/Honeycomb/\nDatadog/console exporter)"]
     end
 
     subgraph DB["PostgreSQL"]
@@ -71,10 +79,16 @@ flowchart TB
     end
 
     UI -->|HTTP| MW
+    UI -.->|errors + replay| SENTRY_WEB
+    SENTRY_WEB -.->|capture| SENTRY_SAAS
     WS_CLIENT -->|WebSocket| COLLAB
+    OTEL -.-> MW
+    SENTRY_API -.-> MW
     MW --> OBS
     OBS --> ROUTES
     ROUTES --> DOC_TABLE
+    SENTRY_API -.->|capture| SENTRY_SAAS
+    OTEL -.->|traces| OTLP
     DOC_TABLE --- IDX
     DOC_TABLE --- OTHER
     COLLAB --> DOC_TABLE
@@ -90,7 +104,7 @@ flowchart TB
 
     class UI,EDITOR,WS_CLIENT browser
     class MW,ROUTES,COLLAB api
-    class OBS,HEALTH new
+    class OBS,HEALTH,SENTRY_WEB,SENTRY_API,OTEL,SENTRY_SAAS,OTLP new
     class DOC_TABLE,OTHER db
     class IDX new
     class DOCKER,TF infra
@@ -326,9 +340,9 @@ pnpm test && pnpm test:unit && pnpm test:a11y
 
 ## 7. Evaluation and Benchmarking
 
-The `eval/` directory contains rerunnable scripts that produce committed JSON artifacts. These artifacts are the evidence standard — they replace ephemeral terminal screenshots.
+The `eval/` directory contains rerunnable scripts that produce committed JSON artifacts. These artifacts are the evidence standard — they replace ephemeral terminal screenshots. Evaluation is organized into three categories: **performance benchmarks** (what happens at runtime), **code health evaluation** (what the source looks like statically), and **dependency health evaluation** (what we depend on and whether it's safe).
 
-### 7.1 Benchmark Scripts
+### 7.1 Performance Benchmark Scripts
 
 | Script | What it measures | How to run |
 |---|---|---|
@@ -336,29 +350,70 @@ The `eval/` directory contains rerunnable scripts that produce committed JSON ar
 | `eval/benchmark-bundle.sh` | Production bundle total size, chunk count, largest chunk | `bash eval/benchmark-bundle.sh` |
 | `eval/benchmark-queries.sql` | EXPLAIN ANALYZE for the 5 most-queried user flows | `psql $DATABASE_URL -f eval/benchmark-queries.sql` |
 
-### 7.2 Before/After Evidence Artifacts
+### 7.2 Code Health Evaluation
+
+Static measurements run during baseline. Each produces a committed artifact for reproducibility.
+
+| Tool | What it measures | Artifact | How to run |
+|---|---|---|---|
+| `grep` + `tsc --strict --noEmit` | Type safety violation counts (any, as, !, @ts-ignore) | `eval/results/type-safety-baseline.json` (violations section) | scripted in U2 |
+| **`type-coverage`** | Percentage of identifiers that are NOT `any` (catches implicit any from inference that grep misses) | `eval/results/type-safety-baseline.json` (type_coverage section) | `pnpm dlx type-coverage --detail` |
+| **`eslint --format=json`** | Existing ESLint rule violations from the codebase's configured rules | `eval/results/eslint-baseline.json` | `pnpm exec eslint . --format=json --output-file=eval/results/eslint-baseline.json` |
+| **`madge --circular`** | Circular import dependencies — hidden architectural issues | `eval/results/madge-circular-baseline.txt` | `pnpm dlx madge --circular --extensions ts,tsx web/src api/src` |
+| **`madge --image`** | Visual dependency graph (SVG) for `web/` and `api/` | `eval/results/madge-graph-web.svg`, `eval/results/madge-graph-api.svg` | `pnpm dlx madge --image <out> <entry>` |
+| `c8` / `@vitest/coverage-v8` | Line and branch coverage per package | `eval/results/test-coverage-baseline.json` | scripted in U5 |
+
+### 7.3 Dependency Health Evaluation
+
+Supply-chain measurement. These feed THREAT_MODEL.md §6 (Dependency Security Baseline) with concrete numbers, not assumptions.
+
+| Tool | What it measures | Artifact | How to run |
+|---|---|---|---|
+| **`pnpm audit --json`** | Known CVEs in the dependency tree with severity (Critical/High/Medium/Low) | `eval/results/dependency-audit-baseline.json` | `pnpm audit --json > <artifact>` |
+| **`pnpm outdated` / `npm-check-updates`** | Outdated dependencies by major/minor/patch distance | `eval/results/dependency-outdated-baseline.json` | `pnpm dlx npm-check-updates --jsonAll > <artifact>` |
+| (combined) | Human-readable security + freshness summary | `eval/results/dependency-summary-baseline.md` | scripted post-processing |
+
+### 7.4 Accessibility Evaluation
+
+| Tool | What it measures | Artifact |
+|---|---|---|
+| `axe-playwright` / `pa11y-ci` | WCAG 2.1 AA violations by severity (Critical/Serious/Moderate/Minor) | `eval/results/a11y-baseline.json` and `a11y-after.json` |
+| Lighthouse CLI | Composite accessibility score per page | `eval/results/lighthouse-*.json` (HTML reports) |
+
+### 7.5 Before/After Evidence Artifacts
 
 | Category | Baseline artifact | After artifact |
 |---|---|---|
-| Type safety | `eval/results/type-safety-baseline.json` | `eval/results/type-safety-after.json` |
+| Type safety + ESLint | `eval/results/type-safety-baseline.json`, `eval/results/eslint-baseline.json` | `eval/results/type-safety-after.json`, `eval/results/eslint-after.json` |
 | Bundle size | `eval/results/bundle-baseline.json` | `eval/results/bundle-after.json` |
 | API response time | `eval/results/api-benchmark-baseline.json` | `eval/results/api-benchmark-after.json` |
 | Database queries | `eval/results/db-query-baseline.md` | `eval/results/db-query-after.md` |
 | Test coverage | `eval/results/test-coverage-baseline.json` | `eval/results/test-coverage-after.json` |
 | Runtime errors | `eval/results/error-baseline.md` | `eval/results/error-after.md` |
 | Accessibility | `eval/results/a11y-baseline.json` | `eval/results/a11y-after.json` |
+| Dependency health (baseline only) | `eval/results/dependency-{audit,outdated,summary}-baseline.*` | (not re-measured unless dependencies are upgraded) |
+| Architectural (baseline only) | `eval/results/madge-circular-baseline.txt`, `eval/results/madge-graph-*.svg` | (not re-measured unless module structure changes) |
+| Distributed tracing sample | — | `eval/results/otel-trace-sample.json` |
 
-### 7.3 Reproducibility
+### 7.6 Reproducibility
 
-Benchmarks are reproducible when run against the seeded database (`pnpm db:seed` with 500+ documents) on the same machine. The `eval/README.md` documents hardware and seed state. The `--compare` flag in `benchmark-api.js` produces a diff table so any reviewer can verify the before/after delta without manually comparing JSON files.
+Benchmarks are reproducible when run against the seeded database (`pnpm db:seed` with 500+ documents) on the same machine. The `eval/README.md` documents hardware and seed state. The `--compare` flag in `benchmark-api.js` produces a diff table so any reviewer can verify the before/after delta without manually comparing JSON files. Static evaluation tools (type-coverage, ESLint, madge, pnpm audit) are deterministic — same source code produces same output, no hardware dependency.
 
 ---
 
 ## 8. Observability
 
-### 8.1 Observability Middleware
+Ship's observability layer is intentionally three-tiered. Each tier serves a different question and has a different failure mode. None of them depend on the others — any one can be disabled by env-var without breaking the app.
 
-A fail-open Express middleware added at `api/src/middleware/observability.ts`. It attaches to the request pipeline as the second middleware (after body-parsing, before route handlers) and records structured JSON to stdout.
+| Tier | Component | Purpose | What fails when this tier is down |
+|---|---|---|---|
+| 1. Always-on | Custom Express middleware (`api/src/middleware/observability.ts`) | Structured request logs to stdout, zero external dependency, fail-open | Nothing — logs simply stop |
+| 2. Error + perf | Sentry SDK (`@sentry/node`, `@sentry/react`) | Rich error context with breadcrumbs, source-mapped stack traces, session replay (errors only), performance summaries | Errors still caught by app, but no rich telemetry |
+| 3. Distributed tracing | OpenTelemetry SDK (`@opentelemetry/sdk-node`) | Vendor-neutral traces of HTTP → Express → PostgreSQL chain; OTLP export to any compatible backend | No traces produced; app unaffected |
+
+### 8.1 Tier 1 — Custom Middleware
+
+A fail-open Express middleware at `api/src/middleware/observability.ts`. Attaches to the request pipeline as the second middleware (after Sentry's request handler, before route handlers) and records structured JSON to stdout.
 
 **What is logged:**
 
@@ -389,11 +444,60 @@ A fail-open Express middleware added at `api/src/middleware/observability.ts`. I
 - `Cookie` header value (session token)
 - Request body content (document content may include sensitive information)
 - Response body content
-- Stack traces (error type and message only)
+- Stack traces (error type and message only — full stack traces go through Sentry, not stdout)
 
 **Fail-open design:** The middleware's own recording logic is wrapped in a `try/catch`. If the logger itself throws, the exception is swallowed and the request proceeds normally. Observability failure never causes a request failure.
 
-### 8.2 Health and Readiness Endpoints
+### 8.2 Tier 2 — Sentry
+
+Sentry adds rich error context that stdout logs cannot. Initialized at `api/src/observability/sentry.ts` (backend) and `web/src/observability/sentry.ts` (frontend).
+
+**Backend (`@sentry/node`):**
+- `Sentry.Handlers.requestHandler()` is the first middleware in the chain (before custom observability)
+- `Sentry.Handlers.errorHandler()` is the last error middleware (catches anything that escapes route handlers)
+- `beforeSend` hook strips `Authorization`, `Cookie`, and any body field named `password`, `token`, or `secret`
+- Captures: unhandled exceptions, `process.on('unhandledRejection')` rejections, explicitly-reported errors from U16 fixes
+
+**Frontend (`@sentry/react`):**
+- `Sentry.ErrorBoundary` wraps the entire React tree as a final safety net
+- Per-component error boundaries (added in U16) compose `Sentry.ErrorBoundary` with app-specific recovery UI
+- `BrowserTracing` integration auto-instruments user navigation
+- `Replay` integration: 0% sample rate on normal sessions, 100% on errors — captures the last 10 seconds of user interaction when an error occurs
+- `beforeSend` strips user-typed document content from breadcrumbs
+
+**No-op behavior:** When `SENTRY_DSN_API` or `VITE_SENTRY_DSN_WEB` env vars are unset (e.g., local dev without Sentry account), the SDK initializes as a no-op. The app still works; no telemetry is sent. This is verified by U7 unit tests.
+
+**Health route exclusion:** Sentry's `requestHandler` is configured to ignore `/health` and `/ready` paths via `ignoreTransactions` — keeps noise out of Sentry's UI.
+
+### 8.3 Tier 3 — OpenTelemetry
+
+OpenTelemetry provides vendor-neutral distributed tracing. The same instrumentation can export to Jaeger, Grafana Tempo, Honeycomb, Datadog, AWS X-Ray, or any OTLP-compatible backend.
+
+**Initialization (`api/src/tracing.ts`):**
+- `NodeSDK` instance with auto-instrumentations for HTTP, Express, and PostgreSQL
+- Imported as the literal first line of `api/src/app.ts` (must run before other imports for auto-instrumentation to work)
+- Exporter selection by env var:
+  - `OTEL_TRACES_EXPORTER=otlp` + `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` → production-shape
+  - `OTEL_TRACES_EXPORTER=console` (default when no endpoint configured) → traces print to stdout for local debugging
+  - `OTEL_TRACES_EXPORTER=none` → tracing disabled (test mode)
+
+**What a trace looks like:**
+
+```
+Trace: GET /documents/abc-123
+├── HTTP GET /documents/abc-123             [span_id=root]      [duration: 42ms]
+│   └── express.middleware: auth            [parent=root]        [duration: 3ms]
+│   └── express.middleware: observability   [parent=root]        [duration: <1ms]
+│   └── express.handler: getDocument        [parent=root]        [duration: 35ms]
+│       └── pg.query: SELECT FROM documents [parent=handler]     [duration: 28ms]
+│           {db.statement: "SELECT * FROM documents WHERE id = $1"}
+```
+
+A sample trace from a real run is committed at `eval/results/otel-trace-sample.json` as evidence that auto-instrumentation produces meaningful span chains. This complements §11's EXPLAIN ANALYZE evidence by showing production query timing in the request context.
+
+**Sentry + OTel coexistence:** Both can run simultaneously. OTel must initialize first (via `tracing.ts` import at line 1), then Sentry. Documented in `docs/observability-runbook.md`. If a future conflict surfaces, the runbook covers two fallback options: rely on OTel-only by setting `tracesSampleRate: 0` in Sentry, OR disable OTel's HTTP instrumentation.
+
+### 8.4 Health and Readiness Endpoints
 
 Added at `api/src/routes/health.ts` (only if not already present in the Ship codebase — verified post-fork):
 
@@ -403,7 +507,7 @@ GET /ready   → 200 { "status": "ready", "db_connected": true }
              → 200 { "status": "degraded", "db_connected": false }  (when DB ping fails)
 ```
 
-Health routes are registered before the observability middleware so routine health checks do not pollute the structured log stream.
+Health routes are registered before the observability middleware and explicitly excluded from Sentry transactions and OTel traces so routine health checks do not pollute any of the three observability streams.
 
 ---
 
@@ -694,8 +798,14 @@ The single-table design creates three categories of queries:
 | ★ **autocannon** | Load testing (added) | Node-native, scriptable, JSON output, P50/P95/P99, npx-runnable | k6, Apache Bench, hey | k6 requires a separate install; AB is dated and lacks percentile output; hey is Go-based (not in the Node ecosystem) |
 | ★ **axe-core / axe-playwright** | Accessibility testing (added) | WCAG rule coverage, programmatic output, integrates with existing Playwright setup | Lighthouse CI, pa11y | Lighthouse CI is a score aggregator; axe gives actionable violation details with WCAG references per element |
 | ★ **rollup-plugin-visualizer** | Bundle analysis (added) | Vite-native, treemap output, dev-only, no production impact | source-map-explorer, webpack-bundle-analyzer | source-map-explorer needs source maps in production; bundle-analyzer is webpack-specific |
+| ★ **type-coverage** | Type-safety percentage metric (added) | Catches implicit `any` from inference that grep cannot find; produces a single tracked percentage that complements raw violation counts; CLI-only, zero config | TypeScript's `--strict` flag alone, tsc-watch | `--strict` is binary (on/off) and doesn't quantify; type-coverage gives a continuous metric that can trend over time |
+| ★ **ESLint baseline (`eslint --format=json`)** | Existing rule violation baseline (added measurement only) | Captures the codebase's current quality bar as defined by its own ESLint config; produces JSON suitable for diffing before/after; no config change needed | Biome, Rome (now Biome), Deno lint | We measure what's already configured rather than introducing a competing linter; switching linters is out of scope |
+| ★ **madge** | Circular dependency detection + module graph visualization (added) | Single CLI produces both text (circular deps) and SVG (dependency graph); zero-config for TypeScript projects; high-signal architectural artifact | dependency-cruiser, ESLint `no-cycle` rule | dependency-cruiser is more powerful but heavier; ESLint `no-cycle` only flags during lint and doesn't produce graphs |
+| ★ **pnpm audit + npm-check-updates** | Dependency CVE scan + outdated dependency report (added) | Built-in to pnpm (audit) or zero-config CLI (npm-check-updates); JSON output for programmatic diffing; covers OWASP A6 and A8 with concrete evidence | Snyk, Dependabot, Socket.dev | Snyk requires account; Dependabot is GitHub-only and produces PRs not snapshots; built-in `pnpm audit` is sufficient for baseline evidence |
 | ★ **Vitest / Jest** | API unit tests (added) | Matches existing test runner (whichever is configured); fast, TypeScript-native | Mocha + Chai | Mocha requires more configuration; Vitest/Jest are the modern standard and likely already present |
-| ★ **Custom observability middleware** | Structured request logging (added) | Zero external dependency, fail-open, additive to existing middleware chain | Datadog APM, New Relic, OpenTelemetry SDK | External APM services require credentials and network egress; OTel SDK is heavier than needed for MVP structured logging |
+| ★ **Custom observability middleware** | Tier 1 structured request logging (added) | Zero external dependency, fail-open, additive to existing middleware chain, always-on baseline | Logging only via Sentry/OTel | A baseline that works without any external service is the right floor; Sentry/OTel add on top |
+| ★ **Sentry (`@sentry/node`, `@sentry/react`)** | Tier 2 error tracking + performance monitoring (added) | Rich error context (breadcrumbs, source-mapped stack traces, session replay on errors), free tier covers this project size, gracefully no-ops without DSN configured | Bugsnag, Rollbar, Honeybadger, Datadog Errors | Sentry has the strongest React + Node integration story, official Replay support, and the most mature free tier; Bugsnag and Rollbar are comparable but Sentry's React error boundary integration is best-in-class |
+| ★ **OpenTelemetry (`@opentelemetry/sdk-node` + auto-instrumentations)** | Tier 3 vendor-neutral distributed tracing (added) | Industry-standard; same instrumentation exports to Jaeger, Tempo, Honeycomb, Datadog, AWS X-Ray, or console for local dev; auto-instruments HTTP, Express, and PostgreSQL without code changes | Direct vendor SDKs (Datadog APM, New Relic agent), Jaeger client libraries directly | Vendor SDKs lock the codebase to one backend; raw Jaeger client requires manual span management. OTel is the CNCF standard and decouples instrumentation from the backend choice |
 
 > ★ marks tools added by the Week 4 enhancement project. Everything else is part of the original Ship stack.
 
@@ -713,9 +823,34 @@ The single-table design creates three categories of queries:
 
 **TipTap editor accessibility.** TipTap manages its own keyboard navigation and ARIA roles internally. The Week 4 accessibility fixes target the application chrome (navigation, issue list, sprint board) and deliberately avoid modifying TipTap internals, which have their own release cadence. Editor-internal accessibility improvements should be tracked against TipTap upstream releases.
 
-**Observability middleware scope.** The custom middleware provides structured logging sufficient for development and demo purposes. It does not replace production APM (distributed tracing, error sampling, alerting). For a production deployment, the middleware output should be piped to a log aggregator (Datadog, Loki, CloudWatch) and supplemented with an OpenTelemetry SDK integration.
+**Observability layering.** Three tiers are intentional: custom middleware (always on, zero cost), Sentry (rich error + perf telemetry), OpenTelemetry (vendor-neutral distributed tracing). Each tier is independent — any one can be disabled by env var without breaking the others or the app. The cost of three tiers is configuration complexity: three SDKs to initialize in the right order, three sets of env vars to document, three "is this disabled correctly" paths to test. The benefit is graceful degradation: a dev without a Sentry account still sees structured logs; a production deployment without an OTel backend still has Sentry; a fully-air-gapped environment without any external service still has stdout logs. For most teams adopting this codebase, the right starting point is "custom middleware + Sentry"; OpenTelemetry becomes valuable once distributed tracing across services is needed.
 
-**Before/after measurements are machine-specific.** Benchmark results in `eval/results/` were captured on `[AFTER: TBD — document hardware specs]`. P95 latency numbers will differ on different hardware. The improvement percentages are the reproducible signal, not the absolute millisecond values.
+**Sentry + OpenTelemetry coexistence.** Both SDKs auto-instrument the Express middleware chain. They can conflict if initialized in the wrong order or if both try to manage spans for the same HTTP request. The mitigation is documented in `docs/observability-runbook.md`: OpenTelemetry initializes first (via `tracing.ts` import at line 1 of `app.ts`), then Sentry initializes from its own module. If a conflict surfaces in production, the runbook covers two fallback configurations: rely on OTel-only by setting Sentry's `tracesSampleRate: 0`, OR disable OTel's HTTP instrumentation.
+
+**Before/after measurements are machine-specific.** Benchmark results in `eval/results/` were captured on `[AFTER: TBD — document hardware specs]`. P95 latency numbers will differ on different hardware. The improvement percentages are the reproducible signal, not the absolute millisecond values. Static evaluation artifacts (type-coverage, ESLint, madge, pnpm audit) are machine-independent — same source produces same output on any platform — so those baselines are fully portable.
+
+**Dependency CVE baseline is a snapshot, not a continuous signal.** `pnpm audit` captures known vulnerabilities at the time the baseline was run. New CVEs disclosed after the snapshot will not appear until the audit is re-run. For production deployment, this baseline should be re-run on a schedule (e.g., weekly via CI) and Critical/High findings should generate alerts. The MVP-scope captures the baseline as evidence; ongoing monitoring is documented as a future consideration in operational notes.
+
+---
+
+### 13.1 Documented Edge Cases and Risk Handling
+
+The audit and improvement process explicitly handles the following edge cases. Each is also documented at the corresponding implementation unit in the plan.
+
+| Edge case | Where handled | Mitigation |
+|---|---|---|
+| **TypeScript strict-mode explosion** | U2 plan | If `tsc --strict --noEmit` errors exceed 5× the grep violation count, defer enabling strict mode; mark as deferred in baseline JSON and document as future work. The 25% improvement target is on grep violations, not strict-mode errors |
+| **Benchmark against empty database** | U4, U8 plan; `eval/benchmark-api.js` | Pre-flight check: every benchmark script verifies seed state (≥100 documents) before measuring; fails fast with clear error if un-seeded |
+| **Flaky test attribution** | U5 plan; `eval/results/test-coverage-baseline.json` | Pre-existing flake signature recorded in baseline; only *new* flakes after improvements are attributed to our changes |
+| **Migration failure mid-flight** | U14 plan; migration files | Down migration committed alongside up migration (`DROP INDEX IF EXISTS`); up migration uses `IF NOT EXISTS` for safe retry; explicit `indisvalid` check after migration |
+| **Lighthouse score variance** | U17 plan | Median of 3 runs before and 3 runs after; improvement is median delta, not single-run delta; deterministic axe violation count provides a noise-free alternate target |
+| **CVE that cannot be fixed** | U18 plan; THREAT_MODEL.md §7 | "Won't-fix with rationale" pattern: CVE ID, dependency chain, why patch is not viable, compensating control, future-work timeline |
+| **Code splitting on SSR codebase** | U12 plan | Verify Ship is CSR-only before introducing `React.lazy()`; if SSR is present, fall back to Vite `manualChunks` config |
+| **WebSocket reconnect with expired session** | U16 plan | Detect 401/403 on reconnect handshake; display clear "session expired" UI; do not silently retry with dead token; Sentry tag distinguishes session-expired from network-failure reconnects |
+| **Sentry free tier rate limit** | U7 plan; `docs/observability-runbook.md` | Separate Sentry projects per environment; `tracesSampleRate: 0.1` in dev; Sentry mocked in unit tests; `SENTRY_DSN= pnpm test` recommended for repeated dev test loops |
+| **TBD marker leak in ARCHITECTURE.md** | U21 plan | Grep check before submission: `grep -c "TBD" ARCHITECTURE.md` must return 0; offending lines listed and filled before U22 |
+
+These are not hypothetical risks — each is a failure mode that has happened on similar projects and that this plan explicitly handles rather than discovers at execution time.
 
 ---
 

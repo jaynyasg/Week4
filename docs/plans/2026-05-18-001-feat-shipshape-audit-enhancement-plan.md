@@ -140,6 +140,7 @@ eval/
   results/
     type-safety-baseline.json
     type-safety-after.json
+    eslint-baseline.json                     ← from U2 (existing ESLint config output)
     bundle-baseline.json
     bundle-after.json
     api-benchmark-baseline.json
@@ -151,6 +152,13 @@ eval/
     error-baseline.md
     a11y-baseline.json
     a11y-after.json
+    madge-circular-baseline.txt              ← from U24 (circular dependency report)
+    madge-graph-web.svg                      ← from U24 (web dependency graph)
+    madge-graph-api.svg                      ← from U24 (api dependency graph)
+    dependency-audit-baseline.json           ← from U18 (pnpm audit CVE scan)
+    dependency-outdated-baseline.json        ← from U18 (pnpm outdated freshness)
+    dependency-summary-baseline.md           ← from U18 (human-readable summary)
+    otel-trace-sample.json                   ← from U25 (sample OpenTelemetry trace)
 
 api/src/
   middleware/
@@ -212,6 +220,9 @@ SUBMISSION.md           ← new, at repo root
 
 **Files:**
 - `ORIENTATION.md` — Ship fork root (committed artifact)
+- `eval/results/madge-circular-baseline.txt` — circular dependency report
+- `eval/results/madge-graph-web.svg` — web/ dependency graph
+- `eval/results/madge-graph-api.svg` — api/ dependency graph
 
 **Approach:**
 
@@ -224,6 +235,8 @@ Read sources, take notes, answer every question. The output is a structured Mark
 - Read every file in `docs/` (the Ship repo's own docs folder, not Week4's); summarize each file's key architectural decisions in your own words
 - Read the `shared/` package: list every exported type, group by purpose (DTOs, enums, utility types), note which are used in `web/`, which in `api/`, which in both
 - Create a Mermaid diagram showing how `web/`, `api/`, and `shared/` packages relate (imports, type sharing, build dependencies)
+- **Run `pnpm dlx madge --circular --extensions ts,tsx web/src api/src` to detect circular import dependencies.** Commit the output to `eval/results/madge-circular-baseline.txt`. If circular dependencies exist, list them in §1.1 of ORIENTATION.md with file paths and the cycle chain — they are often hidden architectural issues worth flagging in §3.1 (weakest points). If none exist, note that explicitly as a strong architectural signal
+- **Run `pnpm dlx madge --image eval/results/madge-graph-web.svg web/src/main.tsx` and `pnpm dlx madge --image eval/results/madge-graph-api.svg api/src/index.ts`** (paths adjusted to actual entry points) to generate visual dependency graphs. Commit both SVG files. The visual graph is a powerful orientation artifact that complements the hand-drawn Mermaid diagram
 
 **1.2 Data Model**
 - Find database schema (migrations in `api/src/db/migrations/` or seed files in `api/src/db/seed/`); list every table with column names and types
@@ -283,20 +296,21 @@ Read sources, take notes, answer every question. The output is a structured Mark
 **Test scenarios:**
 - Test expectation: none — documentation unit, no code change
 
-**Verification:** `ORIENTATION.md` at Ship fork root contains all 8 numbered subsections (1.1, 1.2, 1.3, 2.1, 2.2, 2.3, 2.4, 3.1). Every question is answered with specific file paths or evidence (not generic prose). Mermaid diagram for 1.1 renders correctly. Synthesis section (3.1) names specific decisions and weaknesses, not generic ones. **No audit measurement (U2–U5) begins until this unit is complete.**
+**Verification:** `ORIENTATION.md` at Ship fork root contains all 8 numbered subsections (1.1, 1.2, 1.3, 2.1, 2.2, 2.3, 2.4, 3.1). Every question is answered with specific file paths or evidence (not generic prose). Mermaid diagram for 1.1 renders correctly. Three `madge` artifacts committed: circular dependency report (text) and dependency graphs (SVG) for both `web/` and `api/`. Synthesis section (3.1) names specific decisions and weaknesses, not generic ones — circular dependencies, if any, are flagged here. **No audit measurement (U2–U5) begins until this unit is complete.**
 
 ---
 
-### U2. Type Safety Baseline Measurement
+### U2. Type Safety + Code Quality Baseline Measurement
 
-**Goal:** Capture a reproducible baseline count of all type safety violations AND inventory positive TypeScript patterns already in use. The violation count drives the 25% improvement target; the positive pattern inventory feeds AUDIT.md Discovery and validates the U24 orientation findings against measurable data.
+**Goal:** Capture a reproducible baseline for type safety (grep counts + `type-coverage` percentage), positive TypeScript pattern inventory, AND existing ESLint warnings/errors. The combined output is a measurable picture of code quality before any fix lands. Violation count drives the 25% PDF improvement target; the broader signals feed AUDIT.md Discovery and ARCHITECTURE §9.1.
 
-**Requirements:** 7-category audit (type safety category) + PDF orientation item 2.2 (TypeScript Patterns inventory).
+**Requirements:** 7-category audit (type safety category) + PDF orientation item 2.2 (TypeScript Patterns inventory) + code quality baseline for AUDIT.md.
 
 **Dependencies:** U1, U24
 
 **Files:**
-- `eval/results/type-safety-baseline.json` — committed artifact
+- `eval/results/type-safety-baseline.json` — committed artifact (violation counts + type-coverage % + positive pattern inventory)
+- `eval/results/eslint-baseline.json` — committed artifact (existing rule violations from the codebase's ESLint config)
 
 **Approach:**
 
@@ -306,11 +320,31 @@ Read sources, take notes, answer every question. The output is a structured Mark
 - Identify the 5 most violation-dense files
 - The 25% improvement target requires fixing at least `floor(total × 0.25)` violations; compute and record that threshold in the artifact
 
+**Edge case — strict-mode explosion:** If `tsc --strict --noEmit` produces an overwhelming error count (specifically: `tsc_strict_errors > 5 × total_grep_violations`), do NOT plan to enable strict mode as part of this audit. Strict mode reveals implicit-any errors that grep cannot find, and turning it on in a codebase that was never written under strict can produce hundreds-to-thousands of errors. The 25% improvement target is on *grep violations* (the visible quality bar), not on strict-mode compilation errors. In this case:
+- Record `tsc_strict_errors` count for transparency
+- Mark `strict_mode_recommendation: "deferred_due_to_scale"` in the baseline JSON
+- Note the gap in AUDIT.md as a documented residual risk and a future-work recommendation, not a failure
+- The 25% target on grep violations still applies and remains achievable
+
+*`type-coverage` percentage (sophisticated type-safety metric):*
+- Install `type-coverage` as a dev dependency (`pnpm add -D type-coverage`)
+- Run `pnpm dlx type-coverage --detail` and capture the reported percentage (% of identifiers that are NOT `any`, including implicit `any` from missing return types that grep misses)
+- Record uncovered identifier locations with `--detail` output
+- This metric will be tracked before/after — improvement target maps to a percentage delta in addition to raw count reduction
+- Higher type-coverage with same grep counts means we eliminated implicit `any` from inference, which grep alone wouldn't catch
+
 *Positive pattern inventory (cross-references U24 findings):*
 - Count usages of: discriminated unions (look for `type X = A | B` patterns where each variant has a literal discriminator), generics (`<T>` in function/type definitions), utility types (`Pick`, `Omit`, `Partial`, `Required`, `Readonly`, `Record`), type guards (functions returning `x is Y`)
 - Record one canonical example of each (file path + line range) — these become evidence for AUDIT.md Discovery section
 
-*Artifact shape:*
+*ESLint baseline (`eval/results/eslint-baseline.json`):*
+- Verify ESLint is configured in the codebase (`.eslintrc.*` or `eslint.config.*`); if not present, note that and skip this baseline
+- If configured: run `pnpm exec eslint . --format=json --output-file=eval/results/eslint-baseline.json` (or equivalent for the package manager)
+- Parse the output and produce a summary: total errors, total warnings, top 5 rules by frequency, top 5 files by violation count
+- Record summary in the baseline artifact alongside the raw JSON
+- This is an existing-codebase quality measurement — we are NOT changing the ESLint config or fixing the violations as part of the audit (those are out of scope unless they happen to overlap with type safety fixes)
+
+*Artifact shape (`eval/results/type-safety-baseline.json`):*
 ```json
 {
   "violations": {
@@ -320,12 +354,20 @@ Read sources, take notes, answer every question. The output is a structured Mark
     "ts_ignore": { ... }
   },
   "strict_mode": { "enabled": bool, "tsc_strict_errors": N },
-  "improvement_target": { "fix_at_least": floor(total * 0.25) },
+  "type_coverage": { "percentage": 87.4, "uncovered_count": N, "sample_uncovered": [...] },
+  "improvement_target": { "fix_at_least": floor(total * 0.25), "target_type_coverage": 90.0 },
   "positive_patterns": {
     "generics": { "count": N, "example": "path/to/file.ts:42" },
     "discriminated_unions": { "count": N, "example": "..." },
     "utility_types": { "count": N, "examples": ["Pick: ...", "Omit: ...", "Partial: ..."] },
     "type_guards": { "count": N, "example": "..." }
+  },
+  "eslint_summary": {
+    "configured": true,
+    "total_errors": N,
+    "total_warnings": N,
+    "top_rules": ["@typescript-eslint/no-explicit-any: 87", "..."],
+    "top_files": ["web/src/components/Editor.tsx: 24", "..."]
   }
 }
 ```
@@ -333,7 +375,7 @@ Read sources, take notes, answer every question. The output is a structured Mark
 **Test scenarios:**
 - Test expectation: none — measurement-only unit
 
-**Verification:** `eval/results/type-safety-baseline.json` exists, is committed, contains per-package violation counts, top-5 file list, AND positive pattern inventory with concrete examples.
+**Verification:** `eval/results/type-safety-baseline.json` exists, is committed, contains per-package violation counts, top-5 file list, `type-coverage` percentage with sample uncovered identifiers, positive pattern inventory, AND ESLint summary. `eval/results/eslint-baseline.json` contains the raw ESLint JSON output (if ESLint is configured).
 
 ---
 
@@ -391,6 +433,11 @@ Read sources, take notes, answer every question. The output is a structured Mark
 
 **Execution note:** Seed data must be committed or scripted — do not rely on ephemeral local state. If `pnpm db:seed` exists, use it; if not, write a minimal seed script and commit it to `eval/seed.ts` or `eval/seed.js`.
 
+**Edge case — empty DB pre-flight:** Every benchmark script in `eval/` must verify the database is seeded before running, and fail-fast with a clear error message if not. Benchmarking against an empty DB produces meaningless P95 numbers (everything returns 404 or empty arrays fast) and would silently invalidate the entire audit category. Implementation:
+- `eval/benchmark-api.js` calls `GET /documents` (or equivalent list endpoint) as a pre-flight check; if the response array length is < 100, exit with code 1 and message: `"Database appears un-seeded (<100 documents). Run pnpm db:seed first."`
+- `eval/benchmark-queries.sql` includes a pre-flight `SELECT count(*) FROM documents` row at the top with a comment instructing the operator to verify the count is ≥ 500 before trusting subsequent EXPLAIN ANALYZE output
+- The pre-flight check is itself tested: temporarily truncate the documents table and verify `benchmark-api.js --baseline` exits with code 1 instead of producing a misleading baseline
+
 **Test scenarios:**
 - `autocannon` benchmark completes for all 5 endpoints at all 3 concurrency levels
 - `eval/results/api-benchmark-baseline.json` contains P50/P95/P99 for each endpoint
@@ -420,6 +467,15 @@ Read sources, take notes, answer every question. The output is a structured Mark
 - Read all `e2e/` test files; catalog covered and uncovered critical flows (document CRUD, real-time sync, auth, sprint management)
 - Configure `c8` or `@vitest/coverage-v8` for line/branch coverage if not present; run and record per-package %
 - Commit `eval/results/test-coverage-baseline.json`
+
+**Edge case — flaky test attribution:** Capture the *signature* of each pre-existing flaky test (test name, file path, failure pattern across the 3 runs) in the baseline artifact under a `flaky_baseline` field. This creates the attribution boundary: any *new* flake observed after improvements land that was NOT in this signature list is attributable to our changes. Implementation:
+```json
+"flaky_baseline": [
+  { "test_id": "e2e/documents.spec.ts:should-load-list", "failures_in_3_runs": 1, "failure_pattern": "timeout waiting for selector" },
+  ...
+]
+```
+- Without this attribution boundary, "the test suite is still flaky after our changes" is ambiguous — we cannot tell if our work introduced new flakes or simply didn't fix old ones. The baseline is the contract.
 
 *Runtime error handling:*
 - Open browser DevTools; run through normal usage; count console errors and warnings
@@ -473,22 +529,25 @@ Read sources, take notes, answer every question. The output is a structured Mark
 
 ---
 
-### U7. Observability Middleware and Health Endpoints
+### U7. Observability Layer — Custom Middleware + Sentry + Health Endpoints
 
-**Goal:** Add fail-open request observability and health/readiness endpoints to the Express API.
+**Goal:** Add a three-part observability layer: (1) fail-open custom Express middleware for structured request logs, (2) Sentry SDK integration for error tracking and performance monitoring on backend and frontend, (3) health/readiness endpoints. All three are additive — they do not modify any existing middleware or route handler logic.
 
-**Requirements:** Enhancement package — observability layer.
+**Requirements:** Enhancement package — observability layer (tier 1 always-on + tier 2 error tracking).
 
 **Dependencies:** U1
 
 **Files:**
-- `api/src/middleware/observability.ts`
+- `api/src/middleware/observability.ts` — custom fail-open middleware
+- `api/src/observability/sentry.ts` — backend Sentry initialization
+- `web/src/observability/sentry.ts` — frontend Sentry initialization
 - `api/src/routes/health.ts` (only if `/health` and `/ready` do not already exist)
-- `api/src/__tests__/observability.test.ts`
+- `api/src/__tests__/middleware/observability.test.ts`
+- `.env.example` — add `SENTRY_DSN_API`, `SENTRY_DSN_WEB`, `SENTRY_ENVIRONMENT`, `SENTRY_TRACES_SAMPLE_RATE` (documented; not committed with real values)
 
 **Approach:**
 
-*Middleware (`api/src/middleware/observability.ts`):*
+*Custom middleware (`api/src/middleware/observability.ts`):*
 - Express middleware that records `method`, `path`, `status_code`, `duration_ms` as structured JSON to stdout on every request completion
 - Catches and records `error_type`, `error_message` (no stack trace) on unhandled errors
 - Emits event types: `request_completed`, `request_errored`, `server_started`
@@ -496,22 +555,62 @@ Read sources, take notes, answer every question. The output is a structured Mark
 - Fail-open: wraps the recording in try/catch so middleware errors never propagate to the request
 - Attached in `api/src/app.ts` (or equivalent entry point) as the first middleware after body-parser — no changes to any other existing middleware
 
+*Backend Sentry (`api/src/observability/sentry.ts`):*
+- Initialize `@sentry/node` with `dsn: process.env.SENTRY_DSN_API`, `environment: process.env.SENTRY_ENVIRONMENT ?? "development"`, `tracesSampleRate: parseFloat(process.env.SENTRY_TRACES_SAMPLE_RATE ?? "0.1")`
+- Initialize at the very top of `api/src/app.ts` (or main entry) — must run before other imports for auto-instrumentation
+- Attach `Sentry.Handlers.requestHandler()` as the first middleware (before the custom observability middleware)
+- Attach `Sentry.Handlers.errorHandler()` as the last error middleware
+- Add `beforeSend` hook that strips PII-like fields: `Authorization`, `Cookie` headers; any request body field named `password`, `token`, `secret`
+- If `SENTRY_DSN_API` is unset (e.g., local dev without Sentry), the SDK no-ops; no errors thrown
+
+*Frontend Sentry (`web/src/observability/sentry.ts`):*
+- Initialize `@sentry/react` in `web/src/main.tsx` (or app entry) with `dsn: import.meta.env.VITE_SENTRY_DSN_WEB`, integrations including `BrowserTracing` and `Replay` (Replay sampled at 0% by default; 100% on errors)
+- Wire `Sentry.ErrorBoundary` as a top-level wrapper above the React tree — complements the granular per-component error boundaries added in U16
+- `beforeSend` strips any user-typed document content from breadcrumbs (document content may contain sensitive info)
+- If `VITE_SENTRY_DSN_WEB` is unset, SDK no-ops
+
 *Health routes (`api/src/routes/health.ts`):*
 - Verify whether `GET /health` and `GET /ready` already exist in `api/src/`; if they do, make no changes
 - If not present: add `GET /health → { status: "ok" }` and `GET /ready → { status: "ready" | "degraded", db_connected: boolean }` — check DB connection with a lightweight ping query
 - Register health routes before the observability middleware so they do not appear in structured logs (or register them after but filter them from logs by path prefix)
+- Sentry's `requestHandler()` excludes health route paths from tracing via `ignoreTransactions` config
+
+**Why three components and not one:**
+- Custom middleware is always on, costs nothing, gives a structured log baseline that works without any external service. Demo-friendly and grader-reproducible.
+- Sentry provides rich error context (breadcrumbs, source-mapped stack traces, user session replay, performance metrics) that stdout logs cannot. Free tier covers this project; gracefully no-ops when DSN absent.
+- Health endpoints answer "is this app up" without requiring Sentry login.
+
+**Edge case — Sentry free tier rate limit:** Sentry's free tier allows 5K events/month per project. Repeated dev/test runs that trigger error capture can exhaust this quota quickly (a single test loop that throws a handled error 1000 times burns 20% of the monthly quota). Mitigation:
+- Use a dedicated Sentry project for `development` environment (separate from `production`) so dev events do not eat production quota
+- Set `tracesSampleRate: 0.1` in dev (10% of transactions traced) and `tracesSampleRate: 1.0` only in `production`
+- Set `Replay` integration to `sessionSampleRate: 0` in dev (replays only on errors, not on routine sessions)
+- For deliberate error-capture tests (e.g., U16 ErrorBoundary smoke test), mock `@sentry/node` and `@sentry/react` so the test asserts on the mock without sending real events to Sentry
+- Document the recommended Sentry project structure in `docs/observability-runbook.md`: one project for `production`, one for `staging`, one for `development`
+- If a test run is observed to be sending real events: `SENTRY_DSN_API= SENTRY_DSN_WEB= pnpm test` runs with Sentry as no-op (no events sent)
 
 **Patterns to follow:** Week 3 `agentforge/observability/events.py` for event structure; Week 3 `agentforge/http/app.py` for how health routes are registered.
 
 **Test scenarios:**
+
+*Custom middleware:*
 - Happy path: middleware records `request_completed` event with correct method/path/status/duration for a normal GET request
 - Error path: when a downstream handler throws, middleware records `request_errored` event without leaking the stack trace
 - Sensitive data exclusion: `Authorization` header value does not appear in any logged output
 - Fail-open: when the middleware's own logging code throws, the original request still completes with the correct status
-- Health route: `GET /health` returns `{ status: "ok" }` with 200 (only if route is new)
-- Readiness route: `GET /ready` returns `db_connected: true` when DB is reachable, `db_connected: false` and `status: "degraded"` when DB ping fails (only if route is new)
 
-**Verification:** Unit tests pass. Middleware is attached and logs structured events during `pnpm dev`. No existing test regressions.
+*Sentry backend:*
+- When `SENTRY_DSN_API` is unset, app starts without errors and no Sentry transport is initialized (verify via mock)
+- `beforeSend` hook strips `Authorization` header from captured event payload (assertion against `Sentry.captureException` mock)
+- Health route `GET /health` does NOT generate a Sentry transaction
+
+*Sentry frontend:*
+- (smoke test in U10 a11y suite or U15 new E2E test) ErrorBoundary catches a deliberately-thrown render error and renders fallback UI without crashing the page
+
+*Health routes:*
+- `GET /health` returns `{ status: "ok" }` with 200 (only if route is new)
+- `GET /ready` returns `db_connected: true` when DB is reachable, `db_connected: false` and `status: "degraded"` when DB ping fails (only if route is new)
+
+**Verification:** Unit tests pass. Middleware is attached and logs structured events during `pnpm dev`. Sentry SDK initializes without errors when DSN env vars are unset. With a test DSN configured, a deliberately-thrown error is captured by Sentry (verify in Sentry UI or via local dev console). No existing test regressions.
 
 ---
 
@@ -694,6 +793,11 @@ Read sources, take notes, answer every question. The output is a structured Mark
 - After changes: run `pnpm build`, capture new `dist/` sizes via `bash eval/benchmark-bundle.sh`, save to `eval/results/bundle-after.json`
 - Confirm: no functionality removed; all existing tests pass
 
+**Edge case — code splitting requires CSR:** `React.lazy()` and `Suspense` for route-level code splitting only work in **client-side-rendered (CSR) applications**. If Ship uses any server-side rendering (SSR) — even partial — naive `React.lazy()` will throw `Error: A React component suspended while rendering, but no fallback UI was specified` on the server, breaking those routes. Before introducing `React.lazy()`:
+- Verify Ship is CSR-only: check `web/` for SSR signals — `renderToString`, `renderToPipeableStream`, `getServerSideProps` (Next.js), `loader` exports (Remix), `entry-server.tsx` (Vite SSR templates). The PDF describes Ship as a Vite + React SPA, which is CSR-only, but verify post-fork
+- If SSR is in use: code-split via Vite's manual `build.rollupOptions.output.manualChunks` config instead, which produces a similar bundle improvement without affecting render lifecycle. Document the choice in `eval/results/bundle-after.json`
+- If CSR-only: proceed with `React.lazy()` + `Suspense` as planned. Smoke-test each lazy-loaded route in the browser before committing — chunk loading errors are runtime, not build-time, and would not surface during `pnpm build`
+
 **Test scenarios:**
 - `pnpm build` succeeds; no new build errors
 - All existing Playwright tests pass (lazy-loaded routes still load correctly)
@@ -757,6 +861,12 @@ Read sources, take notes, answer every question. The output is a structured Mark
 
 **Note on schema constraint:** Adding an index is NOT a schema change to protected tables — it is a performance-only addition. Modifying the `documents` table structure (columns, constraints) is out of scope. Index additions are explicitly in scope.
 
+**Edge case — migration failure and rollback:** `CREATE INDEX CONCURRENTLY` can fail mid-flight for several reasons: lock timeout (another transaction held a competing lock), duplicate index name (re-run after partial failure), disk space exhaustion, or query cancellation. When `CONCURRENTLY` fails, PostgreSQL leaves the index in an `INVALID` state — it exists in `pg_index` but cannot be used by the query planner and must be dropped before retrying. The plan must include:
+- A companion **down migration** (`DROP INDEX IF EXISTS idx_documents_type_workspace;`) committed alongside the up migration — proves the change is reversible
+- The up migration uses `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_documents_type_workspace ON documents (document_type, workspace_id);` — `IF NOT EXISTS` makes retry safe
+- Verification step: after running the up migration, query `SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'documents' AND indexname = 'idx_documents_type_workspace'` AND `SELECT indisvalid FROM pg_index WHERE indexrelid = 'idx_documents_type_workspace'::regclass` — both must return `true`
+- If the index is `INVALID` after the up migration, run the down migration, investigate the cause, and retry. Do NOT proceed to benchmark `db-query-after.md` measurement until the index is `VALID`
+
 **Test scenarios:**
 - Migration runs cleanly with `pnpm db:migrate`
 - `EXPLAIN ANALYZE` output in `eval/results/db-query-after.md` shows index used for the targeted query
@@ -796,33 +906,43 @@ Each new test IS the test scenario. Three examples (actual choices driven by U5 
 
 ---
 
-### U16. Error Handling Fixes
+### U16. Error Handling Fixes (with Sentry Capture)
 
-**Goal:** Fix 3 error handling gaps; at least one must address a real user-facing data loss or confusion scenario.
+**Goal:** Fix 3 error handling gaps; at least one must address a real user-facing data loss or confusion scenario. Every fix also routes its error path through Sentry (initialized in U7) so the team gets telemetry alongside the UX improvement.
 
 **Requirements:** Runtime error handling improvement target.
 
-**Dependencies:** U5 (error baseline and silent failures cataloged), U6 (gate complete)
+**Dependencies:** U5 (error baseline and silent failures cataloged), U6 (gate complete), U7 (Sentry SDK initialized backend + frontend)
 
 **Files:**
 - `web/src/` — React error boundaries, loading states, network failure recovery UI
-- `api/src/` — unhandled promise rejection handlers, malformed input validation
+- `web/src/components/ErrorBoundary.tsx` — custom error boundary that wraps `Sentry.ErrorBoundary` and shows app-specific recovery UI
+- `api/src/middleware/async-error-handler.ts` — Express async error middleware
+- `api/src/` — `process.on('unhandledRejection')` handler that captures to Sentry
 - `eval/results/error-after.md`
 
 **Approach:**
 - Select the 3 highest-severity gaps from U5:
-  - **Data loss priority:** network disconnect during collaborative edit that causes silent data loss — add a reconnection recovery banner and verify Yjs reconnect preserves unsaved state
-  - **User confusion priority:** missing error boundary around the document editor — unhandled render errors currently crash the entire app; wrap with `React.ErrorBoundary` that shows a recovery UI
-  - **Server-side priority:** unhandled promise rejection in a route handler — add a `process.on('unhandledRejection')` handler and/or Express async error middleware that converts unhandled rejections to 500 responses with structured JSON
+  - **Data loss priority:** network disconnect during collaborative edit that causes silent data loss — add a reconnection recovery banner and verify Yjs reconnect preserves unsaved state. Capture reconnect failures via `Sentry.captureMessage("yjs_reconnect_failed", { extra: { documentId, attempts } })`
+    - **Edge case — expired session on reconnect:** if the user disconnects (laptop closed, network drop) for longer than the session token TTL, the WebSocket reconnect will succeed at the transport layer but the server-side auth check will fail. Without explicit handling, the user appears "connected" while every Yjs sync silently fails. The fix must: (a) detect 401/403 from the server during reconnect handshake or first sync attempt, (b) display a clear UI message ("Session expired — please refresh and sign in"), (c) NOT silently retry the reconnect loop forever with a dead token. Send `Sentry.captureMessage("yjs_reconnect_session_expired", { level: "info" })` to distinguish auth-failure reconnects from network-failure reconnects in telemetry
+  - **User confusion priority:** missing error boundary around the document editor — unhandled render errors currently crash the entire app; wrap with a custom `ErrorBoundary` that composes `Sentry.ErrorBoundary` to capture the error AND renders app-specific recovery UI (not Sentry's generic fallback)
+  - **Server-side priority:** unhandled promise rejection in a route handler — add Express async error middleware that converts unhandled rejections to 500 responses with structured JSON. Also add `process.on('unhandledRejection', (reason, promise) => { Sentry.captureException(reason); /* structured log */ })` for rejections outside the request scope
 - Each fix requires: reproduction steps, before behavior description, after behavior description, screenshot or test evidence
 - Add reproduction steps to `eval/results/error-after.md`
+- Each fix's Sentry capture is verified manually: trigger the error in dev with a test DSN; confirm the event appears in the Sentry UI with useful breadcrumbs and source-mapped stack trace
+
+**Patterns to follow:**
+- React error boundary pattern: `Sentry.ErrorBoundary` with `fallback={<AppRecoveryUI />}` — composes Sentry's capture with custom UI
+- Express async error pattern: `app.use((err, req, res, next) => { Sentry.captureException(err); res.status(500).json({ error: "internal", message: err.message }); })`
 
 **Test scenarios:**
-- Error boundary: mount a component that throws during render; assert the error boundary catches it and renders a recovery message instead of crashing the app
-- Malformed input: submit a `POST /documents` request with a body exceeding the size limit; assert a 413 response with descriptive message (not a crash or silent 500)
-- Network recovery: (manual test with DevTools network throttle) disconnect during a collaborative edit, reconnect — assert document content is preserved and a status indicator shows "reconnecting" then "connected"
+- Error boundary: mount a component that throws during render; assert the error boundary catches it, renders a recovery message instead of crashing the app, AND `Sentry.captureException` is called with the original error (use `@sentry/react` mock)
+- Malformed input: submit a `POST /documents` request with a body exceeding the size limit; assert a 413 response with descriptive message (not a crash or silent 500); assert Sentry receives the captured error with `extra: { body_size: N, limit: M }`
+- Async error middleware: a route handler that throws an unawaited promise; assert the middleware converts it to a 500 with structured JSON response AND Sentry captures the rejection
+- Network recovery: (manual test with DevTools network throttle) disconnect during a collaborative edit, reconnect — assert document content is preserved, a status indicator shows "reconnecting" then "connected", AND Sentry records a breadcrumb `{ category: "yjs.reconnect", level: "warning" }` if reconnect took > 5 seconds
+- Sentry no-op test: with `SENTRY_DSN_API` unset, all three fixes still work end-to-end (UI recovery, structured 500 response, etc.) — Sentry's no-op behavior must not break the underlying error handling
 
-**Verification:** `eval/results/error-after.md` with before/after for each fix. Console error count (manual recheck) lower than baseline. `pnpm test` green.
+**Verification:** `eval/results/error-after.md` with before/after for each fix and notes on whether the error appeared in Sentry test environment. Console error count (manual recheck) lower than baseline. `pnpm test` green.
 
 ---
 
@@ -845,42 +965,76 @@ Each new test IS the test scenario. Three examples (actual choices driven by U5 
 - After fixes: re-run Lighthouse on the 3 target pages; run `pnpm test:a11y` (U10 suite)
 - Save Lighthouse JSON exports and axe scan output to `eval/results/a11y-after.json`
 
+**Edge case — Lighthouse score variance:** Lighthouse accessibility scores vary ±2-3 points run-over-run even with zero code change, due to network jitter, font load timing, and CPU contention. A "+10 point improvement" on a single before/after pair could partly be noise. To produce a defensible measurement:
+- Run Lighthouse **3 times before** the fix and **3 times after** the fix on the same page, same device, same network conditions
+- Compute the **median** score for each set (resistant to outliers)
+- Improvement is the delta between medians, not the delta between any two single runs
+- Require: `median_after - median_before ≥ 10` on the lowest-scoring page, OR `0 Critical/Serious axe violations` on top 3 pages (the OR-target gives a deterministic fallback when Lighthouse is too noisy)
+- Commit all 6 raw Lighthouse JSON exports per page so the median calculation is reproducible
+
 **Test scenarios:**
-- `pnpm test:a11y` passes (zero Critical/Serious violations on the 3 target pages)
-- Lighthouse accessibility score on the lowest-scoring page is ≥ baseline + 10
+- `pnpm test:a11y` passes (zero Critical/Serious violations on the 3 target pages) — this is the deterministic axe-based measurement, not subject to score variance
+- Lighthouse accessibility score on the lowest-scoring page: median of 3 after-runs is ≥ median of 3 before-runs + 10
 - Keyboard navigation: Tab key reaches every interactive element in the header navigation and issue list (manual verification)
 - Icon-only buttons (e.g., "close", "add", "delete") have an `aria-label` that NVDA/VoiceOver reads correctly
 
-**Verification:** Before/after Lighthouse JSON artifacts committed. `pnpm test:a11y` passes. `pnpm test` green.
+**Verification:** Before/after Lighthouse JSON artifacts committed (6 files: 3 before, 3 after per target page). Median calculation shown in `eval/results/a11y-after.json`. `pnpm test:a11y` passes. `pnpm test` green.
 
 ---
 
-### U18. THREAT_MODEL.md
+### U18. THREAT_MODEL.md + Dependency Security Baseline
 
-**Goal:** Write a security-oriented threat model for the Ship application, grounded in OWASP Web Top 10 2021.
+**Goal:** Write a security-oriented threat model for the Ship application AND capture the dependency health baseline (`pnpm audit` + `pnpm outdated`) as measurable evidence behind THREAT_MODEL claims. The baseline turns OWASP A6 (Vulnerable Components) and A8 (Software/Data Integrity) from prose claims into verified numbers.
 
-**Requirements:** Enhancement package — threat model.
+**Requirements:** Enhancement package — threat model + dependency security baseline.
 
 **Dependencies:** U1 (codebase orientation complete), U16 (error handling gaps are known)
 
 **Files:**
 - `THREAT_MODEL.md` — Ship fork root
+- `eval/results/dependency-audit-baseline.json` — `pnpm audit --json` raw output
+- `eval/results/dependency-outdated-baseline.json` — `pnpm outdated --format=json` output (or `pnpm dlx npm-check-updates --jsonAll` if pnpm output is too sparse)
+- `eval/results/dependency-summary-baseline.md` — human-readable summary derived from both JSON files
 
 **Approach:**
-Write using Week 3 `THREAT_MODEL.md` as a style reference. Sections:
 
-1. **Summary** (~400 words): highest-risk surfaces in a TypeScript/React/Express/PostgreSQL stack — rich-text editor XSS, ORM injection surface, WebSocket auth, session management, Terraform state exposure
+*Dependency security baseline (run before writing THREAT_MODEL.md):*
+- `pnpm audit --json > eval/results/dependency-audit-baseline.json` — captures CVE list with severity (Critical/High/Medium/Low), affected packages, dependency chain, and recommended versions
+- `pnpm outdated --format=json > eval/results/dependency-outdated-baseline.json` (or `pnpm dlx npm-check-updates --format json,group --jsonAll > eval/results/dependency-outdated-baseline.json` for richer output)
+- Parse both into a summary (`eval/results/dependency-summary-baseline.md`):
+  - Audit summary: total Critical/High/Medium/Low CVE count, top 5 worst CVEs with affected packages
+  - Outdated summary: count of dependencies major-version-behind, minor-version-behind, patch-behind; top 10 most-outdated
+  - Combined risk score: any Critical or High CVE in a production dependency is flagged as a finding
+- These baselines feed THREAT_MODEL.md A6 (Vulnerable and Outdated Components) and A8 (Software/Data Integrity) sections with concrete evidence, not assumptions
+- **No fixing** at this stage — fixing CVEs and outdated dependencies is out of audit scope unless they overlap with an existing improvement target. Document the baseline; flag the worst findings in THREAT_MODEL.md residual risks
+
+**Edge case — CVE that cannot be fixed:** `pnpm audit` may flag Critical or High CVEs in transitive dependencies where no compatible patch exists, or where the patched version introduces a breaking change that would cascade across the codebase. The plan must accommodate this:
+- For each Critical/High CVE that is NOT fixed during this audit, THREAT_MODEL.md §7 (Residual risks) must include a **"Won't-fix with rationale"** entry naming: CVE ID, affected package, dependency chain (`direct-dep → ... → vulnerable-dep`), why the patch is not viable (no compatible version exists / breaking change / not yet patched upstream), and compensating control or mitigation (e.g., "exploit requires authenticated workspace admin, mitigated by U16 input validation")
+- Format:
+  ```markdown
+  ### Residual: CVE-2024-XXXXX — Critical, won't-fix
+  - **Package:** `transitive-pkg@1.2.3` (via `direct-dep@^4.0.0 → ... → transitive-pkg`)
+  - **Why not fixed:** Patched in `transitive-pkg@2.0.0` but `direct-dep` is pinned to `transitive-pkg@^1.x`; upgrading `direct-dep` to a version that allows the patch requires a breaking API change in our route handlers
+  - **Compensating control:** [exploit prerequisite] mitigated by [existing defense / U16 fix]
+  - **Future work:** track `direct-dep` v5 release timeline
+  ```
+- This pattern is honest documentation — pretending all CVEs are fixed is worse than acknowledging the gap with rationale
+
+*Write `THREAT_MODEL.md` using Week 3 `THREAT_MODEL.md` as a style reference:*
+
+1. **Summary** (~400 words): highest-risk surfaces in a TypeScript/React/Express/PostgreSQL stack — rich-text editor XSS, ORM injection surface, WebSocket auth, session management, Terraform state exposure, dependency CVE exposure
 2. **Assets:** user documents, sprint/project metadata, session tokens, WebSocket connections, PostgreSQL credentials, Terraform state
 3. **Trust boundaries:** unauthenticated public → authenticated user → workspace admin; WebSocket channel; PostgreSQL network access; CI/CD secrets
-4. **Attack surface map:** auth endpoints, document CRUD routes, WebSocket message handling, TipTap rich-text output (XSS surface), `document_type` discriminator (injection surface if unsanitized), Terraform IAM scope, Docker build context — each row with OWASP reference and expected control
+4. **Attack surface map:** auth endpoints, document CRUD routes, WebSocket message handling, TipTap rich-text output (XSS surface), `document_type` discriminator (injection surface if unsanitized), Terraform IAM scope, Docker build context, dependency tree — each row with OWASP reference and expected control
 5. **Existing defenses:** auth middleware, ORM parameterization (verify in `api/src/db/`), Docker multi-stage build, `pnpm` lockfile
-6. **Residual risks:** TipTap HTML sanitization scope, WebSocket message validation completeness, Terraform state file exposure, rate limiting absence
-7. **Framework references:** OWASP Web Top 10 2021 (A1 Broken Access Control, A3 Injection, A5 Security Misconfiguration, A7 XSS), NIST SSDF
+6. **Dependency Security Baseline:** subsection summarizing `dependency-summary-baseline.md` findings — total CVE counts by severity, top 5 worst, most-outdated production dependencies, overall risk posture
+7. **Residual risks:** TipTap HTML sanitization scope, WebSocket message validation completeness, Terraform state file exposure, rate limiting absence, any Critical/High CVEs from audit baseline that were not fixed during this project, dependency drift (count of major-version-behind)
+8. **Framework references:** OWASP Web Top 10 2021 (A1 Broken Access Control, A3 Injection, A5 Security Misconfiguration, A6 Vulnerable Components, A7 XSS, A8 Software/Data Integrity), NIST SSDF
 
 **Test scenarios:**
-- Test expectation: none — documentation unit
+- Test expectation: none — documentation + measurement unit
 
-**Verification:** `THREAT_MODEL.md` at fork root. Covers all 7 sections. OWASP references present. Existing defenses verified against actual code (not assumed).
+**Verification:** `THREAT_MODEL.md` at fork root covers all 8 sections. OWASP references present. Existing defenses verified against actual code (not assumed). `eval/results/dependency-audit-baseline.json` and `eval/results/dependency-outdated-baseline.json` are committed. `eval/results/dependency-summary-baseline.md` summarizes the worst findings. The Dependency Security Baseline subsection of THREAT_MODEL.md cites specific numbers from these artifacts, not generic prose.
 
 ---
 
@@ -975,7 +1129,13 @@ Write using Week 3 `ARCHITECTURE.md` as a style reference. All 13 sections:
 **Test scenarios:**
 - Test expectation: none — documentation unit
 
-**Verification:** `ARCHITECTURE.md` at fork root with all 13 sections. Before/after sections present in Data Model, Real-Time Collaboration, New Features, Database. Mermaid diagram renders correctly. Tools table has at least 10 entries with "Why not" column filled.
+**Edge case — TBD marker leak:** The draft version of ARCHITECTURE.md uses `[BASELINE: TBD]` and `[AFTER: TBD]` markers as placeholders. Every marker must be replaced with a real value before the final submission. A grep check is the verification:
+- `grep -c "TBD" ARCHITECTURE.md` must return `0`
+- `grep -c "\[BASELINE:" ARCHITECTURE.md` must return `0`
+- `grep -c "\[AFTER:" ARCHITECTURE.md` must return `0`
+- If any of those returns nonzero, list the offending line numbers (`grep -n "TBD" ARCHITECTURE.md`) and fill them in before U22 (final AUDIT.md update). A `TBD` left in a final-submission artifact is a visible defect that signals incomplete work to a grader
+
+**Verification:** `ARCHITECTURE.md` at fork root with all 13 sections. Before/after sections present in Data Model, Real-Time Collaboration, New Features, Database. Mermaid diagram renders correctly. Tools table has at least 15 entries (including all 5 evaluation tools and 2 observability tools added in this project) with "Why not" column filled. **`grep -c "TBD" ARCHITECTURE.md` returns 0.**
 
 ---
 
@@ -1000,6 +1160,74 @@ Write using Week 3 `ARCHITECTURE.md` as a style reference. All 13 sections:
 - Test expectation: none — documentation unit
 
 **Verification:** `AUDIT.md` has improvement subsections for all 7 categories. Every improvement cites an `eval/results/` artifact. Discovery section has 3 entries with codebase file references.
+
+---
+
+### U25. OpenTelemetry Distributed Tracing
+
+**Goal:** Add OpenTelemetry SDK auto-instrumentation for the Express API — vendor-neutral distributed traces covering HTTP, Express middleware, and PostgreSQL queries. Exports to a configurable OTLP endpoint OR to a console exporter when no backend is configured (so local dev still produces visible trace output).
+
+**Requirements:** Enhancement package — observability tier 3 (distributed tracing standard).
+
+**Dependencies:** U1, U7 (Sentry + custom middleware should already be wired before adding OTel to avoid concurrent init conflicts)
+
+**Files:**
+- `api/src/tracing.ts` — OTel SDK initialization (must be the FIRST import in the app entry point)
+- `api/src/app.ts` or `api/src/index.ts` — add `import "./tracing"` as the literal first line (no changes elsewhere)
+- `api/package.json` — add OTel dependencies
+- `.env.example` — add `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_EXPORTER`
+- `eval/results/otel-trace-sample.json` — committed sample trace output proving auto-instrumentation works
+- `docs/observability-runbook.md` (in Ship fork) — how to view traces locally, how to point at a Jaeger/Tempo/Honeycomb backend, how to interpret a trace
+
+**Approach:**
+
+*Dependencies to add (`api/package.json`):*
+- `@opentelemetry/sdk-node`
+- `@opentelemetry/auto-instrumentations-node`
+- `@opentelemetry/exporter-trace-otlp-http`
+- `@opentelemetry/api`
+- `@opentelemetry/resources`
+- `@opentelemetry/semantic-conventions`
+
+*Initialization (`api/src/tracing.ts`):*
+- Create a `NodeSDK` instance configured with:
+  - `serviceName: process.env.OTEL_SERVICE_NAME ?? "ship-api"`
+  - `traceExporter`: switch on `process.env.OTEL_TRACES_EXPORTER` — `"otlp"` (default if endpoint set), `"console"` (default if endpoint unset), or `"none"` (test mode)
+  - `instrumentations: [getNodeAutoInstrumentations({ "@opentelemetry/instrumentation-fs": { enabled: false } })]` — disable fs instrumentation (noisy, low signal)
+- Call `sdk.start()` synchronously at module load
+- Register a `process.on("SIGTERM")` hook that calls `sdk.shutdown()` to flush pending spans
+- Wrap initialization in try/catch — if OTel fails to start, log a warning and continue (fail-open, same posture as the custom middleware)
+
+*Sentry coexistence note:*
+- Sentry's `requestHandler` and OTel auto-instrumentation can both wrap Express. Order matters: OTel must initialize first (via the `tracing.ts` import at line 1), then Sentry. This is documented in `docs/observability-runbook.md`
+- If they conflict in practice, the runbook documents the workaround: use Sentry's `tracesSampleRate: 0` (rely on OTel for traces) OR disable OTel's HTTP instrumentation. Default plan is to keep both running
+
+*Exporter selection by environment:*
+- Local dev with no backend: console exporter (traces print to stdout in human-readable form for debugging)
+- Local dev with Jaeger via Docker (`docker run jaegertracing/all-in-one`): `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`
+- Production: point at any OTLP-compatible backend (Honeycomb, Grafana Tempo, Datadog, AWS X-Ray via collector)
+- Documentation in `docs/observability-runbook.md` covers all three setups
+
+*Sample trace output:*
+- After wiring OTel, run a request through `pnpm dev`, capture one full trace from the console exporter, save it to `eval/results/otel-trace-sample.json`
+- This is the evidence artifact proving auto-instrumentation produces meaningful spans (HTTP → Express → PostgreSQL chain)
+
+**Why OpenTelemetry on top of Sentry and the custom middleware:**
+- Sentry is excellent for errors and performance summaries but is a vendor-locked format. OTel is vendor-neutral — the same instrumentation feeds Honeycomb, Tempo, Datadog, Jaeger, etc.
+- Custom middleware is great for stdout structured logs but doesn't produce parent-child span relationships needed for distributed tracing
+- OTel auto-instrumentation specifically captures the PostgreSQL query layer, which complements U14's EXPLAIN ANALYZE evidence with real production query timing
+- Demonstrates industry-standard observability discipline, not just a custom solution
+
+**Patterns to follow:** OpenTelemetry Node.js getting-started guide (https://opentelemetry.io/docs/languages/js/getting-started/nodejs/); standard pattern is `--require ./tracing` flag in package.json scripts OR first-line import
+
+**Test scenarios:**
+- Unit test: `tracing.ts` exports a `shutdown()` function that resolves successfully
+- Unit test: when `OTEL_TRACES_EXPORTER=none`, no exporter is registered and `sdk.start()` does not throw
+- Unit test: when init fails (mock by passing invalid config), the app starts anyway and logs a warning (fail-open)
+- Integration smoke: with console exporter active, hitting `GET /documents` produces a trace JSON line on stdout containing at least one span with `http.method=GET` and at least one span with `db.system=postgresql`
+- Integration smoke: hitting `GET /health` is excluded from traces (low-signal noise)
+
+**Verification:** `pnpm dev` starts the API with OTel active. Sample trace captured to `eval/results/otel-trace-sample.json` shows the HTTP → Express → PostgreSQL span chain for a real document fetch. `docs/observability-runbook.md` documents all three exporter modes. No existing test regressions. Sentry and OTel coexist without errors.
 
 ---
 
