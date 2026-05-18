@@ -30,10 +30,11 @@ Fork a live, production-grade TypeScript monorepo (the US Treasury's Ship projec
 
 ### In scope
 - Fork setup, local environment, baseline test run
+- **Codebase orientation phase** — systematic completion of all 24+ questions in the PDF Appendix Codebase Orientation Checklist, produced as `ORIENTATION.md`
 - 7-category baseline measurement with committed artifact evidence
 - All 7 improvement targets (type safety, bundle size, API performance, DB query efficiency, test coverage, error handling, accessibility)
 - ARCHITECTURE.md with before/after sections (written after all improvements land)
-- THREAT_MODEL.md, USERS.md, AI-COST-ANALYSIS.md, SUBMISSION.md, AUDIT.md
+- ORIENTATION.md, THREAT_MODEL.md, USERS.md, AI-COST-ANALYSIS.md, SUBMISSION.md, AUDIT.md
 - Observability middleware (`api/src/middleware/observability.ts`)
 - Health/readiness endpoints (added if not present; untouched if present)
 - Benchmark scripts (`eval/` directory) — rerunnable with `--baseline`/`--compare` flags
@@ -78,6 +79,12 @@ Fork a live, production-grade TypeScript monorepo (the US Treasury's Ship projec
 ```
 Phase 0: Fork + Setup
   └── verify env, run existing tests, record baseline test count
+
+Phase 0.5: Codebase Orientation (PDF Appendix gate)
+  └── ORIENTATION.md
+        ├── Phase 1 First Contact: repo overview, data model, request flow
+        ├── Phase 2 Deep Dive: real-time collab, TypeScript patterns, testing infra, build/deploy
+        └── Phase 3 Synthesis: 3 strongest + 3 weakest + onboarding advice + 10x scaling break point
 
 Phase 1: Baseline Measurement (commit artifacts after each category)
   ├── type-safety-baseline.json    (grep counts, tsc error count)
@@ -155,6 +162,7 @@ e2e/
   accessibility/
     (pa11y-ci or axe-playwright test files)
 
+ORIENTATION.md          ← new, at repo root (PDF Appendix checklist)
 ARCHITECTURE.md         ← new, at repo root
 THREAT_MODEL.md         ← new, at repo root
 USERS.md                ← new, at repo root
@@ -194,28 +202,138 @@ SUBMISSION.md           ← new, at repo root
 
 ---
 
-### U2. Type Safety Baseline Measurement
+### U24. Codebase Orientation (PDF Appendix Gate)
 
-**Goal:** Capture a reproducible baseline count of all type safety violations before making any fixes.
+**Goal:** Complete the full PDF Appendix Codebase Orientation Checklist before any audit measurement begins. Produce `ORIENTATION.md` as a committed artifact containing systematic answers to all 24+ checklist questions across the 3 orientation phases. The PDF explicitly states: *"Your orientation notes become part of your final submission."*
 
-**Requirements:** 7-category audit (type safety category).
+**Requirements:** PDF Appendix — Codebase Orientation Checklist (Phase 1, 2, 3). Prerequisite gate for all baseline measurement units (U2–U5).
 
 **Dependencies:** U1
+
+**Files:**
+- `ORIENTATION.md` — Ship fork root (committed artifact)
+
+**Approach:**
+
+Read sources, take notes, answer every question. The output is a structured Markdown document with one subsection per checklist item. Be specific — cite file paths and line ranges where claims are grounded.
+
+*Phase 1: First Contact*
+
+**1.1 Repository Overview**
+- Clone steps that worked, and any steps not in the README (record verbatim — feeds SUBMISSION.md setup section)
+- Read every file in `docs/` (the Ship repo's own docs folder, not Week4's); summarize each file's key architectural decisions in your own words
+- Read the `shared/` package: list every exported type, group by purpose (DTOs, enums, utility types), note which are used in `web/`, which in `api/`, which in both
+- Create a Mermaid diagram showing how `web/`, `api/`, and `shared/` packages relate (imports, type sharing, build dependencies)
+
+**1.2 Data Model**
+- Find database schema (migrations in `api/src/db/migrations/` or seed files in `api/src/db/seed/`); list every table with column names and types
+- Document the unified document model: how one `documents` table serves docs, issues, projects, and sprints — which columns are type-specific, which are universal, what goes into `metadata` JSONB
+- Document `document_type` discriminator usage: list every query that filters on it (grep `document_type` in `api/src/`), note which queries lack `document_type` filter
+- Document relationship handling: parent-child (`parent_id` self-reference), workspace membership, document linking patterns
+
+**1.3 Request Flow**
+- Pick one concrete user action (recommended: creating an issue) and trace it end-to-end:
+  - React component triggering the action (file path + line range)
+  - Network request shape (method, path, body, headers)
+  - Middleware chain hit (in order)
+  - Route handler (file path + line range)
+  - Database query executed (the actual SQL or ORM call)
+  - Response shape returned
+  - React state update on success
+- Document the full middleware chain: list every middleware in order, with its responsibility, in `api/src/`
+- Document authentication: how session tokens are validated, what happens to unauthenticated requests (response code, body shape), session token storage mechanism
+
+*Phase 2: Deep Dive*
+
+**2.1 Real-time Collaboration**
+- Document how the WebSocket connection is established (handshake URL, auth mechanism, initial sync payload)
+- Document how Yjs syncs document state (binary update format, broadcast pattern, room/channel scoping)
+- Document concurrent-edit behavior: trace what happens when two users edit the same field — does Yjs converge automatically, is server arbitration required, how does TipTap render the merge
+- Document server-side Yjs state persistence: when does it write (on every update, debounced, on disconnect), where does it write (which table column), what is the format (BYTEA snapshot of full Y.Doc)
+
+**2.2 TypeScript Patterns**
+- Record TypeScript version (from `package.json` or `tsconfig.json`)
+- Record full `tsconfig.json` settings: strict mode on/off, individual strict flags (noImplicitAny, strictNullChecks, etc.)
+- Document type-sharing pattern: how `shared/` types reach `web/` and `api/` — direct import, build-time copy, or symlink
+- Find and cite 1 example each (with file path + line range) of: generics in use, discriminated union, utility type (`Pick`/`Omit`/`Partial`/`Required`/`Readonly`), type guard function
+- Note any TypeScript patterns not previously recognized; research them; record the name, what it does, and one sentence on when to use it. These feed the Discovery section of AUDIT.md
+
+**2.3 Testing Infrastructure**
+- Document Playwright test structure: directory layout, naming convention, suite organization, `playwright.config.ts` highlights
+- Document Playwright fixtures used (custom fixtures in `e2e/fixtures/` or `test.extend` patterns); list each fixture and what it provides
+- Document test database lifecycle: how is the test DB created, seeded, and torn down (per-test, per-file, per-run); is it shared with dev DB or isolated
+- Run `pnpm test` and record: total test count, runtime, all-pass status, any flaky tests on 3 consecutive runs
+
+**2.4 Build and Deploy**
+- Read `Dockerfile`; document each stage and what it produces (multi-stage build outputs)
+- Read `docker-compose.yml`; list every service it starts (web, api, db, etc.), the port mappings, and inter-service dependencies
+- Read Terraform configs in `terraform/`; list the cloud resources expected (VPC, ECS/Fargate/Lambda, RDS, S3, IAM roles, etc.) and which cloud provider
+- Document CI/CD pipeline: is there a `.github/workflows/` or `.gitlab-ci.yml`; what does it run on push/PR; deploy target
+
+*Phase 3: Synthesis (graded section — answer thoughtfully)*
+
+**3.1 Architecture Assessment**
+- **3 strongest architectural decisions in this codebase and why** — name each decision, cite where it's evident in code, explain why it's strong (e.g., unified document model = simple migrations, single API surface, cheap to add new content types)
+- **3 weakest points and where improvement should focus** — name each weakness, cite evidence (file path or behavior observed), explain the cost (e.g., no rate limiting on document creation = vulnerable to abuse from authenticated users)
+- **Onboarding advice** — write a paragraph: if you had to onboard a new engineer to this codebase today, what would you tell them first? What concept must they understand before reading code? What patterns will surprise them?
+- **10x scaling break point** — if Ship had 10x more users (more workspaces, more documents, more concurrent WebSocket connections), what would break first? Why? What's the rough magnitude of work to fix it?
+
+**Execution note:** This is reading-and-writing work, not code-changing work. Take real notes. The graded value of this unit is the *quality and specificity* of the synthesis section (3.1), not just answering the questions.
+
+**Test scenarios:**
+- Test expectation: none — documentation unit, no code change
+
+**Verification:** `ORIENTATION.md` at Ship fork root contains all 8 numbered subsections (1.1, 1.2, 1.3, 2.1, 2.2, 2.3, 2.4, 3.1). Every question is answered with specific file paths or evidence (not generic prose). Mermaid diagram for 1.1 renders correctly. Synthesis section (3.1) names specific decisions and weaknesses, not generic ones. **No audit measurement (U2–U5) begins until this unit is complete.**
+
+---
+
+### U2. Type Safety Baseline Measurement
+
+**Goal:** Capture a reproducible baseline count of all type safety violations AND inventory positive TypeScript patterns already in use. The violation count drives the 25% improvement target; the positive pattern inventory feeds AUDIT.md Discovery and validates the U24 orientation findings against measurable data.
+
+**Requirements:** 7-category audit (type safety category) + PDF orientation item 2.2 (TypeScript Patterns inventory).
+
+**Dependencies:** U1, U24
 
 **Files:**
 - `eval/results/type-safety-baseline.json` — committed artifact
 
 **Approach:**
+
+*Violation count (baseline for improvement target):*
 - Run grep counts for `: any`, `as `, `!.`, `@ts-ignore`, `@ts-expect-error` across `web/src/`, `api/src/`, `shared/` — break down by package and violation type
 - Check `tsconfig.json` strict mode setting; if not enabled, run `tsc --strict --noEmit` and record error count
 - Identify the 5 most violation-dense files
-- Commit `eval/results/type-safety-baseline.json` with raw counts and file list
 - The 25% improvement target requires fixing at least `floor(total × 0.25)` violations; compute and record that threshold in the artifact
+
+*Positive pattern inventory (cross-references U24 findings):*
+- Count usages of: discriminated unions (look for `type X = A | B` patterns where each variant has a literal discriminator), generics (`<T>` in function/type definitions), utility types (`Pick`, `Omit`, `Partial`, `Required`, `Readonly`, `Record`), type guards (functions returning `x is Y`)
+- Record one canonical example of each (file path + line range) — these become evidence for AUDIT.md Discovery section
+
+*Artifact shape:*
+```json
+{
+  "violations": {
+    "any": { "total": N, "by_package": { "web": N, "api": N, "shared": N }, "top_files": [...] },
+    "as_assertions": { ... },
+    "non_null_assertions": { ... },
+    "ts_ignore": { ... }
+  },
+  "strict_mode": { "enabled": bool, "tsc_strict_errors": N },
+  "improvement_target": { "fix_at_least": floor(total * 0.25) },
+  "positive_patterns": {
+    "generics": { "count": N, "example": "path/to/file.ts:42" },
+    "discriminated_unions": { "count": N, "example": "..." },
+    "utility_types": { "count": N, "examples": ["Pick: ...", "Omit: ...", "Partial: ..."] },
+    "type_guards": { "count": N, "example": "..." }
+  }
+}
+```
 
 **Test scenarios:**
 - Test expectation: none — measurement-only unit
 
-**Verification:** `eval/results/type-safety-baseline.json` exists, is committed, contains per-package counts and top-5 file list.
+**Verification:** `eval/results/type-safety-baseline.json` exists, is committed, contains per-package violation counts, top-5 file list, AND positive pattern inventory with concrete examples.
 
 ---
 
@@ -325,26 +443,33 @@ SUBMISSION.md           ← new, at repo root
 
 ### U6. AUDIT.md — Baseline Report (Phase 1 Gate)
 
-**Goal:** Write the formal audit report with all 7 category baselines filled in, as required by the Phase 1 PDF gate.
+**Goal:** Write the formal audit report with all 7 category baselines filled in, plus the synthesis sections required by the PDF (Discovery + Architecture Assessment), as required by the Phase 1 PDF gate.
 
-**Requirements:** All 7 audit categories must be complete before this unit.
+**Requirements:** All 7 audit categories must be complete before this unit. PDF Discovery Requirement (3 things learned) + PDF Appendix Phase 3 Synthesis (Architecture Assessment).
 
-**Dependencies:** U2, U3, U4, U5
+**Dependencies:** U2, U3, U4, U5, U24
 
 **Files:**
 - `AUDIT.md` — committed to Ship fork root
 
 **Approach:**
 - Write `AUDIT.md` following the Week 3 `AUDIT.md` and `AUDIT_V2.md` style (see `Week3/AUDIT.md`)
-- Include per-category sections: measurement methodology, tools used, baseline numbers (from committed artifacts), identified weaknesses ranked by severity
-- Include a "Discovery" section: 3 things learned during orientation (TypeScript feature, architectural pattern, library, or engineering practice not previously known — each with codebase location, explanation, and future application)
-- Leave improvement sections as stubs at this stage (filled in U22 after fixes land)
+- Include per-category sections (1–7): measurement methodology, tools used, baseline numbers (from committed artifacts), identified weaknesses ranked by severity
+- Include a **Discovery** section per PDF Discovery Requirement: 3 specific things learned during orientation/audit (TypeScript feature, architectural pattern, library, or engineering practice not previously known) — each with: (1) name, (2) codebase file path + line range, (3) what it does and why it matters, (4) how you would apply this knowledge in a future project. Source these from U24 orientation findings (especially 2.2 TypeScript Patterns) and U2 positive pattern inventory
+- Include an **Architecture Assessment** section per PDF Appendix Phase 3 Synthesis (this is graded — answer with specificity, not generics):
+  - **3 strongest architectural decisions** — each with name, evidence in code (file path), and a paragraph explaining why it's strong. Source from U24 §3.1
+  - **3 weakest points** — each with name, evidence (file path or observed behavior), cost or risk, and where improvement should focus. Source from U24 §3.1 and the audit baseline findings
+  - **Onboarding advice** — what you would tell a new engineer on day one about this codebase
+  - **10x scaling break point** — what would break first at 10x current load, why, and rough magnitude to fix
+- Leave improvement subsections per category as stubs at this stage (filled in U22 after fixes land)
 - Mark clearly: "Phase 1 Gate — baseline only, no fixes yet"
+
+**Patterns to follow:** Week 3 `AUDIT.md` and `AUDIT_V2.md` for section structure and discovery write-up style.
 
 **Test scenarios:**
 - Test expectation: none — documentation unit
 
-**Verification:** `AUDIT.md` at repo root contains all 7 category tables with real baseline numbers. No improvement claims yet.
+**Verification:** `AUDIT.md` at repo root contains all 7 category tables with real baseline numbers, a Discovery section with 3 entries (each citing a file path and explaining future application), and an Architecture Assessment section answering all 4 PDF synthesis questions with specific evidence. No improvement claims yet.
 
 ---
 

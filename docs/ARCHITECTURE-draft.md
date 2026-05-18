@@ -2,6 +2,10 @@
 
 > **Draft status:** This document is pre-filled with known architecture from the codebase description and the ShipShape project brief. Sections marked `[BASELINE: TBD]` are filled in during Phase 1 (audit). Sections marked `[AFTER: TBD]` are filled in after improvements land. All `TBD` markers are replaced before final submission.
 >
+> **Companion documents that source this one:**
+> - `ORIENTATION.md` — answers the PDF Appendix Codebase Orientation Checklist (24+ questions). Sections 3 (Request Flow), 4 (Data Model), 5 (Real-Time Collaboration), and 13 (Tradeoffs) pull their factual claims from ORIENTATION.md. Sections of this document marked with `[from ORIENTATION.md §X.Y]` derive specifically from that source.
+> - `AUDIT.md` — contains the 7-category baseline measurements, Discovery section, and Architecture Assessment synthesis. Section 9 (New Features and Enhancements) here mirrors AUDIT.md's per-category improvement subsections.
+>
 > **Target repo:** `US-Department-of-the-Treasury/ship` (forked)
 > **Week 4 enhancement project:** ShipShape — Auditing and Improving a Production TypeScript Codebase
 
@@ -99,6 +103,8 @@ flowchart TB
 
 ## 3. Component and Request Flow
 
+> Factual claims in this section derive from `ORIENTATION.md §1.3 Request Flow`, which performs an end-to-end trace as a deliberate orientation task.
+
 ### 3.1 HTTP Request Flow (Document Creation)
 
 A typical document creation request travels through the following chain:
@@ -157,6 +163,8 @@ User reconnects
 ---
 
 ## 4. Data Model
+
+> Schema details and `document_type` usage patterns in this section derive from `ORIENTATION.md §1.2 Data Model`.
 
 ### 4.1 Unified Document Model
 
@@ -227,6 +235,8 @@ EXPLAIN ANALYZE delta:
 
 ## 5. Real-Time Collaboration
 
+> WebSocket establishment, Yjs sync behavior, concurrent-edit handling, and persistence timing in this section derive from `ORIENTATION.md §2.1 Real-time Collaboration`.
+
 ### 5.1 Yjs CRDT Architecture
 
 Yjs is a conflict-free replicated data type (CRDT) library. Rather than sending "user typed X at position Y," Yjs sends binary update deltas that can be applied in any order and always converge to the same result. This eliminates the classic operational transformation (OT) problem of needing a central authority to order operations.
@@ -268,6 +278,8 @@ Beyond document sync, Ship uses WebSocket messages (not Yjs) for real-time prese
 ---
 
 ## 6. Testing Flow
+
+> Fixture patterns, test DB lifecycle, and existing test count in this section derive from `ORIENTATION.md §2.3 Testing Infrastructure`.
 
 Ship has three test tiers after the Week 4 enhancement project:
 
@@ -691,6 +703,8 @@ The single-table design creates three categories of queries:
 
 ## 13. Known Tradeoffs
 
+> The "10x scaling break point" analysis and weaknesses cataloged in this section are sourced from `ORIENTATION.md §3.1 Architecture Assessment` and verified against AUDIT.md baseline measurements.
+
 **Unified document model at scale.** The single-table design is elegant and maintainable at current data volumes. At >1M rows, list-view queries will require increasingly specific compound indexes to avoid table scans, and any `SELECT *` query becomes expensive due to `content` (JSONB) and `yjs_state` (BYTEA) column sizes. The fix is column projection discipline in queries, not a schema change.
 
 **Yjs server memory.** The server maintains a `Y.Doc` instance in memory per open document. Memory grows proportionally with the number of concurrently open documents and the depth of each document's edit history. For very long-lived documents with extensive edit history, the binary snapshot size can become large. The fix is periodic Yjs state compaction (garbage-collect unreachable operations), which is supported by the Yjs library but not yet configured.
@@ -707,8 +721,12 @@ The single-table design creates three categories of queries:
 
 ## Sources
 
-- ShipShape assignment PDF: `GFA Week 4 - ShipShape.pdf` (in Week4 planning repo)
+- ShipShape assignment PDF: `GFA Week 4 - ShipShape.pdf` (in Week4 planning repo) — including the Appendix Codebase Orientation Checklist that drives ORIENTATION.md
 - Target repository: `https://github.com/US-Department-of-the-Treasury/ship`
+- Companion repo-root documents that this one cross-references:
+  - `ORIENTATION.md` (Ship fork root) — PDF Appendix orientation findings; primary source for §3, §4, §5, §6, §13
+  - `AUDIT.md` (Ship fork root) — 7-category baseline + improvements + Discovery + Architecture Assessment; primary source for §9 and §11
+  - `THREAT_MODEL.md` (Ship fork root) — feeds §10 (Security)
 - Requirements document: `docs/brainstorms/shipshape-requirements.md` (Week4 planning repo)
 - Implementation plan: `docs/plans/2026-05-18-001-feat-shipshape-audit-enhancement-plan.md` (Week4 planning repo)
 - Week 3 architecture style reference: `Week3/ARCHITECTURE.md`
