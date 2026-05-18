@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(python -c ' *)",
-      "Bash(pip install *)"
+      "Bash(pip install *)",
+      "Bash(ls /c/Users/jaynyasg/.claude/projects/C--Users-jaynyasg-OneDrive-Documents-GitLab-Week4/memory/ 2>&1)"
     ]
   }
 }
